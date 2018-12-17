@@ -1,0 +1,8 @@
+#Cmake
+CMakeLists.txt.user
+build
+
+#Data
+*.png
+*.jpg
+*.jpeg
