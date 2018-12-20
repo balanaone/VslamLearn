@@ -4,6 +4,7 @@ ADD_LIBRARY(myslam SHARED
     map.cpp
     camera.cpp
     config.cpp
+    visual_odometry.cpp
 )
 
 TARGET_LINK_LIBRARIES(myslam
