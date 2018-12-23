@@ -12,9 +12,9 @@ namespace myslam
 class VisualOdometry
 {
 public:
-    shared_ptr<VisualOdometry> Ptr;
+    typedef shared_ptr<VisualOdometry> Ptr;
     enum VOState {
-        INITIALIZAING = -1,
+        INITIALIZING = -1,
         OK = 0,
         LOST
     };
@@ -25,7 +25,7 @@ public:
     Frame::Ptr  curr_;      // current frame
 
     cv::Ptr<cv::ORB>        orb_;               // orb detector and computer
-    vector<cv::Point3f>     pts_3d_curr_;       // 3d points in reference frame
+    vector<cv::Point3f>     pts_3d_ref_;        // 3d points in reference frame
     vector<cv::KeyPoint>    keypoints_curr_;    // keypoints in current frame
     Mat                     descriptors_curr_;  // descriptor in current frame
     Mat                     descriptors_ref_;   // descriptor in reference frame
