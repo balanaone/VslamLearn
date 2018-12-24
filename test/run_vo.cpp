@@ -93,6 +93,7 @@ int main(int argc, char ** argv)
         vis.setWidgetPose("Camera", M);
         vis.spinOnce(1, false);
     }
+
     return 0;
 }
 

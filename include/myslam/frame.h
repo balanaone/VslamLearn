@@ -17,6 +17,7 @@ public:
     SE3                     T_c_w_;
     Camera::Ptr             camera_;
     Mat                     color_, depth_;
+    bool                    is_key_frame_;  // whether a  key-frame
 
 public:
     Frame();
@@ -31,6 +32,8 @@ public:
 
     // Get camera center
     Vector3d getCamCenter() const;
+
+    void setPose(const SE3& t_c_w);
 
     // check if a point is in this frame
     bool isInFrame(const Vector3d & pt_world);
