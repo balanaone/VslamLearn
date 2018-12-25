@@ -26,14 +26,14 @@ public:
     Frame::Ptr  curr_;      // current frame
 
     cv::Ptr<cv::ORB>        orb_;               // orb detector and computer
-    vector<cv::Point3f>     pts_3d_ref_;        // 3d points in reference frame
     vector<cv::KeyPoint>    keypoints_curr_;    // keypoints in current frame
     Mat                     descriptors_curr_;  // descriptor in current frame
-    Mat                     descriptors_ref_;   // descriptor in reference frame
-    vector<cv::DMatch>      feature_matches_;   // feature matches
-    cv::FlannBasedMatcher   matcher_flann_;     // flann matcher
 
-    SE3 T_c_r_estimated_;   // the estimated pose of current frame
+    cv::FlannBasedMatcher   matcher_flann_;     // flann matcher
+    vector<MapPoint::Ptr> matcher_3dpts_;       // matched 3d points
+    vector<int>             match_2dkp_index_;
+
+    SE3 T_c_w_estimated_;   // the estimated pose of current frame
     int num_inliers_;        // number of inlier features in icp
     int num_lost_;          // number of lost times
 
@@ -60,12 +60,15 @@ protected:
     void extractKeyPoints();
     void computeDescriptors();
     void featureMatching();
-    void setRef3DPoints();
-    void poseEstimationPnP();    
+    void poseEstimationPnP();
+    void optimizeMap();
 
     void addKeyFrame();
+    void addMapPoints();
     bool checkEstimatePose();
     bool checkKeyFrame();
+
+    double getViewAngle(Frame::Ptr frame, MapPoint::Ptr point);
 };
 
 }

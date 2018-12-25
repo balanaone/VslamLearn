@@ -41,25 +41,24 @@ bool VisualOdometry::addFrame(Frame::Ptr frame)
     {
         state_ = OK;
         curr_ = ref_ = frame;
-        map_->insertKeyFrame(frame);
         // extract features from first frame and add them into map
         extractKeyPoints();
         computeDescriptors();
-        setRef3DPoints();
+        addKeyFrame();
         break;
     }
     case OK:
     {
         curr_ = frame;
+        curr_->T_c_w_ = ref_->T_c_w_;
         extractKeyPoints();
         computeDescriptors();
         featureMatching();
         poseEstimationPnP();
         if (checkEstimatePose() == true) // a good estimation
         {
-            curr_->T_c_w_ = T_c_r_estimated_ * ref_->T_c_w_;
-            ref_ = curr_;
-            setRef3DPoints();
+            curr_->T_c_w_ = T_c_r_estimated_;
+            optimizerMap();
             num_lost_ = 0;
             if (checkKeyFrame() == true) //is a key-frame
             {
@@ -102,7 +101,23 @@ void VisualOdometry::featureMatching()
 {
     boost::timer timer;
     vector<cv::DMatch> matches;
-    matcher_flann_.match(descriptors_ref_, descriptors_curr_, matches);
+    // select the candiates in map
+    Mat desp_map;
+    vector<MapPoint::Ptr> candiate;
+    for (auto & allpoints:map_->map_points_)
+    {
+        MapPoint::Ptr & p = allpoints.second;
+        // check if p in curr frame image
+        if (curr_->isInFrame(p->pos_))
+        {
+            // add to candidate
+            p->visible_times_++;
+            candidate.push_back(p);
+            desp_map.push_back(p->descriptor_);
+        }
+    }
+
+    matcher_flann_.match(desp_map, descriptors_curr_, matches);
 
     // select the best matches
     float min_dis = std::min_element(matches.begin(), matches.end(),
@@ -111,45 +126,34 @@ void VisualOdometry::featureMatching()
         return m1.distance < m2.distance;
     })->distance;
 
-    feature_matches_.clear();
+    match_3dpts_.clear();
+    match_2dkp_index_.clear();
     for (cv::DMatch & m : matches)
     {
         if (m.distance < max<float>(min_dis * match_ratio_, 30.0))
         {
-            feature_matches_.push_back(m);
+            match_3dpts_.push_back(candidate[m.queryIdx]);
+            match_2dkp_index_.push_back(m.trainIdx);
         }
     }
-    cout << "good matches: " << feature_matches_.size() << endl;
+    cout << "good matches: " << match_3dpts_.size() << endl;
     cout << "match cost time: " << timer.elapsed() << endl;
 }
 
-void VisualOdometry::setRef3DPoints()
-{
-    // select the features with depth measurements
-    pts_3d_ref_.clear();
-    descriptors_ref_ = Mat();
-    for (size_t i=0; i<keypoints_curr_.size(); i++)
-    {
-        double d = ref_->findDepth(keypoints_curr_[i]);
-        if (d > 0)
-        {
-            Vector3d p_cam = ref_->camera_->pixel2camera(
-                        Vector2d(keypoints_curr_[i].pt.x, keypoints_curr_[i].pt.y), d);
-            pts_3d_ref_.push_back(cv::Point3f(p_cam(0,0), p_cam(1,0), p_cam(2, 0)));
-            descriptors_ref_.push_back(descriptors_curr_.row(i));
-        }
-    }
-}
 
 void VisualOdometry::poseEstimationPnP()
 {
+    // construct the 3d 2d observations
     vector<cv::Point3f> pts3d;
     vector<cv::Point2f> pts2d;
 
-    for(cv::DMatch m : feature_matches_)
+    for(int index : match_2dkp_index_)
     {
-        pts3d.push_back(pts_3d_ref_[m.queryIdx]);
-        pts2d.push_back(keypoints_curr_[m.trainIdx].pt);
+        pts2d.push_back(keypoints_curr_[index].pt);
+    }
+    for(MapPoint::Ptr pt : match_3dpts_)
+    {
+        pts3d.push_back(pt->getPositionCV());
     }
     Mat K = (cv::Mat_<double>(3,3) <<
              ref_->camera_->fx_, 0, ref_->camera_->cx_,
@@ -165,7 +169,7 @@ void VisualOdometry::poseEstimationPnP()
     RE << R.at<double>(0,0), R.at<double>(0,1), R.at<double>(0,2),
             R.at<double>(1,0), R.at<double>(1,1), R.at<double>(1,2),
             R.at<double>(2,0), R.at<double>(2,1), R.at<double>(2,2);
-    T_c_r_estimated_ = SE3(SO3(RE),
+    T_c_w_estimated_ = SE3(SO3(RE),
                           Vector3d(tvec.at<double>(0,0), tvec.at<double>(1,0), tvec.at<double>(2,0)));
     // 经验证证明，下式为小旋转量时的近似取值
 //    T_c_r_estimated_ = SE3(SO3(rvec.at<double>(0,0), rvec.at<double>(1,0), rvec.at<double>(2,0)),
@@ -182,8 +186,8 @@ void VisualOdometry::poseEstimationPnP()
     g2o::VertexSE3Expmap* pose = new g2o::VertexSE3Expmap();
     pose->setId(0);
     pose->setEstimate(g2o::SE3Quat(
-                          T_c_r_estimated_.rotation_matrix(),
-                          T_c_r_estimated_.translation()));
+                          T_c_w_estimated_.rotation_matrix(),
+                          T_c_w_estimated_.translation()));
     optimizer.addVertex(pose);
 
     // edges
@@ -198,13 +202,17 @@ void VisualOdometry::poseEstimationPnP()
         edge->setMeasurement(Vector2d(pts2d[index].x, pts2d[index].y));
         edge->setInformation(Eigen::Matrix2d::Identity());
         optimizer.addEdge(edge);
+        // set the inlier map points
+        match_3dpts_[index]->matched_times_++;
     }
 
     optimizer.initializeOptimization();
     optimizer.optimize(10);
 
-    T_c_r_estimated_ = SE3(pose->estimate().rotation(),
+    T_c_w_estimated_ = SE3(pose->estimate().rotation(),
                           pose->estimate().translation());
+
+    cout << "T_c_w_estimated_:" << endl << T_c_w_estimated_.matrix() << endl;
 }
 
 bool VisualOdometry::checkEstimatePose()
