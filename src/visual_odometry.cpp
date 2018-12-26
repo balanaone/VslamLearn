@@ -224,7 +224,8 @@ bool VisualOdometry::checkEstimatePose()
         return false;
     }
     // if the motion is too large, it is probably wrong
-    Sophus::Vector6d d = T_c_r_estimated_.log();
+    SE3 T_r_c = ref_->T_c_w * T_c_w_estimated_.inverse();
+    Sophus::Vector6d d = T_r_c.log();
     if (d.norm() > 5.0)
     {
         cout << "reject because motion is  too large: " << d.norm() << endl;
@@ -235,7 +236,8 @@ bool VisualOdometry::checkEstimatePose()
 
 bool VisualOdometry::checkKeyFrame()
 {
-    Sophus::Vector6d  d = T_c_r_estimated_.log();
+    SE3 T_r_c = ref_->T_c_w * T_c_w_estimated_.inverse();
+    Sophus::Vector6d  d = T_r_c.log();
     Vector3d trans = d.head<3>();
     Vector3d rot = d.tail<3>();
     if (rot.norm() > key_frame_min_rot || trans.norm() > key_frame_min_trans)
@@ -245,8 +247,96 @@ bool VisualOdometry::checkKeyFrame()
 
 void VisualOdometry::addKeyFrame()
 {
-    cout << "adding a key-frame" << endl;
+    if (map_->keyframes_.empty())
+    {
+        // first key-frame, add all 3d points into map
+        for(size_t i =0; i<keypoints_curr_.size(); i++)
+        {
+            double d = curr_->findDepth(keypoints_curr_[i]);
+            if (d < 0)
+                continue;
+            Vector3d p_world = ref_->camera_->pixel2world(
+                        Vector2(keypoints_curr_[i].pt.x, keypoints_curr_[i].pt.y), curr_->T_c_w_, d);
+            Vector3 n = p_world - ref_->getCamCenter();
+            n.normalize();
+            MapPoint::Ptr map_point = MapPoint::createMapPoint(p_world, n, descriptors_curr_.row(i).clone(), curr_.get());
+            map_->insertMapPoint(map_point);
+        }
+    }
     map_->insertKeyFrame(curr_);
+    ref_ = curr_;
 }
 
+void VisualOdometry::addMapPoints()
+{
+    Vector<bool> matched(keypoints_curr_.size(), false);
+    for(int index : match_2dkp_index_)
+        matched[index] = true;
+    for(int i=0; i<keypoints_curr_.size(); i++)
+    {
+        if (matched[i] == true)
+            continue;
+        double d = ref_->findDepth(keypoints_curr_[i]);
+        if (d < 0)
+            continue;
+        Vector3d p_world = ref_->camera_->pixel2world(
+                    Vector2d(keypoints_curr_[i].pt.x, keypoints_curr_[i].pt.y),
+                    curr_->T_c_w_, d);
+        Vector3d n = p_world - ref_->getCamCenter();
+        n.normalize();
+        MapPoint::Ptr map_point = MapPoint::createMapPoint(
+                    p_world, n, descriptors_curr_.row(i).clone(), curr_.get());
+        map_->insertMapPoint(map_point);
+    }
+}
+
+void VisualOdometry::optimizeMap()
+{
+    // remove the hardly seen and no visible points
+    for(auto iter = map_->map_points_.begin(); iter != map_->map_points_.end();)
+    {
+        if (!curr_>isInFrame(iter->second->Pos_))
+        {
+            iter = map_->map_points_.erase(iter);
+            continue;
+        }
+        float match_ratio = float(iter->second->matched_times_)/iter->second->visible_times_;
+        if (match_ration < map_point_erase_ratio_)
+        {
+            iter = map_->map_points_.erase(iter);
+            continue;
+        }
+
+        double angle = getViewAngle(curr_, iter->second);
+        if (angle > M_PI/6.)
+        {
+            iter = map_->map_points_.erase(iter);
+            continue;
+        }
+         if (iter->second->good_ == false)
+         {
+            // TODO try triangulate this map point
+         }
+         iter++;
+    }
+
+    if (match_2dkp_index_.size() < 100)
+        addMapPoints();
+    if (Map_->map_points_.size() > 1000)
+    {
+        // TODO map is too large, remove some one
+        map_point_erase_ratio_ += 0.05;
+    }
+    else
+        map_point_erase_ratio_ = 0.1;
+    cout << "map Points: " << map_->map_points_.size() << endl;
+}
+
+
+double VisualOdometry::getViewAngle(Frame::Ptr frame, MapPoint::Ptr point)
+{
+    Vector3d n = point->pos_ - frame->getCamCenter();
+    n.normalize();
+    return acos(n.transpose*point->norm_);
+}
 }
